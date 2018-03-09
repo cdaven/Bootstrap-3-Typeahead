@@ -20,9 +20,20 @@
  * ============================================================ */
 
 
+interface JQuery {
+    typeahead: (option: any) => void;
+}
+
 module Bootstrap3Typeahead {
 
+    type arrstrcallback = () => string[];
+    type numcallback = () => number;
+
     interface IOptions {
+        source?: string[] | arrstrcallback;
+        items?: number | "all";
+        minLength?: number;
+        scrollHeight?: number | numcallback;
         matcher?: any;
         sorter?: any;
         select?: any;
@@ -34,49 +45,63 @@ module Bootstrap3Typeahead {
         itemLink?: string;
         itemTitle?: string;
         followLinkOnSelect?: any;
-        source?: any;
         delay?: number;
         theme?: string;
         themes?: any;
         menu?: any;
         appendTo?: HTMLElement;
         fitToElement?: boolean;
-        showHintOnFocus?: boolean;
+        showHintOnFocus?: boolean | "all";
         afterSelect?: any;
         afterEmptySelect?: any;
+        addItem?: any;
+        separator?: string;
     }
 
-    class Typeahead {
+    interface ITheme {
+        menu: string;
+        item: string;
+        itemContentSelector: string;
+        headerHtml: string;
+        headerDivider: string;
+    }
+
+    interface IItem {
+        name: string;
+        __type: "category" | "divider";
+    }
+
+    export class Typeahead {
         options: IOptions;
         $element: JQuery;
         $menu: JQuery;
         $appendTo: JQuery;
-        matcher: any;
-        sorter: any;
-        select: any;
         autoSelect: boolean;
-        highlighter: any;
-        render: any;
-        updater: any;
-        displayText: any;
-        itemLink: string;
-        itemTitle: string;
         followLinkOnSelect: any;
         source: any;
         delay: number;
-        theme: string;
+        theme: ITheme;
         fitToElement: boolean;
         shown: boolean;
-        showHintOnFocus: boolean;
+        showHintOnFocus: boolean | "all";
         afterSelect: any;
         afterEmptySelect: any;
         addItem: any;
         value: string;
-        keyPressed: boolean;
-        focused: boolean;
+
+        private query: string;
+        private keyPressed: boolean;
+        private focused: boolean;
+        private destroyed: boolean;
+        private mousedover: boolean;
+        private mouseddown: boolean;
+        private hasSameParent: boolean;
+        private suppressKeyPressRepeat: boolean;
+        private skipShowHintOnFocus: boolean;
+        private lookupWorker: number;
 
         static defaults: IOptions = {
-            source: string[],
+            source: [],
             items: 8,
             minLength: 1,
             scrollHeight: 0,
@@ -86,7 +111,7 @@ module Bootstrap3Typeahead {
             addItem: false,
             followLinkOnSelect: false,
             delay: 0,
-            separator: 'category',
+            separator: "category",
             theme: "bootstrap3",
             themes: {
                 bootstrap3: {
@@ -109,19 +134,6 @@ module Bootstrap3Typeahead {
         constructor(element: HTMLElement, options: IOptions) {
             this.$element = $(element);
             this.options = $.extend({}, Typeahead.defaults, options);
-            this.matcher = this.options.matcher || this.matcher;
-            this.sorter = this.options.sorter || this.sorter;
-            this.select = this.options.select || this.select;
-            this.autoSelect = typeof this.options.autoSelect == 'boolean' ? this.options.autoSelect : true;
-            this.highlighter = this.options.highlighter || this.highlighter;
-            this.render = this.options.render || this.render;
-            this.updater = this.options.updater || this.updater;
-            this.displayText = this.options.displayText || this.displayText;
-            this.itemLink = this.options.itemLink || this.itemLink;
-            this.itemTitle = this.options.itemTitle || this.itemTitle;
-            this.followLinkOnSelect = this.options.followLinkOnSelect || this.followLinkOnSelect;
-            this.source = this.options.source;
-            this.delay = this.options.delay;
             this.theme = this.options.theme && this.options.themes && this.options.themes[this.options.theme] || Typeahead.defaults.themes[Typeahead.defaults.theme];
             this.$menu = $(this.options.menu || this.theme.menu);
             this.$appendTo = this.options.appendTo ? $(this.options.appendTo) : null;
@@ -132,16 +144,16 @@ module Bootstrap3Typeahead {
             this.afterSelect = this.options.afterSelect;
             this.afterEmptySelect = this.options.afterEmptySelect;
             this.addItem = false;
-            this.value = this.$element.val() || this.$element.text();
+            this.value = (this.$element.val() || this.$element.text()) as string;
             this.keyPressed = false;
             this.focused = this.$element.is(":focus");
         }
 
-        setDefault(val) {
+        setDefault(val: string) {
             // var val = this.$menu.find('.active').data('value');
             this.$element.data('active', val);
             if (this.autoSelect || val) {
-                var newVal = this.updater(val);
+                let newVal = this.updater(val);
                 // Updater can be set to any random functions via "options" parameter in constructor above.
                 // Add null check for cases when updater returns void or undefined.
                 if (!newVal) {
@@ -173,7 +185,7 @@ module Bootstrap3Typeahead {
                     .change();
                 this.afterSelect(newVal);
                 if (this.followLinkOnSelect && this.itemLink(val)) {
-                    document.location = this.itemLink(val);
+                    document.location.href = this.itemLink(val);
                     this.afterSelect(newVal);
                 } else if (this.followLinkOnSelect && !this.itemLink(val)) {
                     this.afterEmptySelect(newVal);
@@ -187,11 +199,11 @@ module Bootstrap3Typeahead {
             return this.hide();
         }
 
-        updater(item) {
+        updater(item: string): string {
             return item;
         }
 
-        setSource(source) {
+        setSource(source: any) {
             this.source = source;
         }
 
@@ -201,7 +213,7 @@ module Bootstrap3Typeahead {
             });
 
             var scrollHeight = typeof this.options.scrollHeight == 'function' ?
-                this.options.scrollHeight.call() :
+                this.options.scrollHeight() :
                 this.options.scrollHeight;
 
             var element;
@@ -247,27 +259,28 @@ module Bootstrap3Typeahead {
             return this;
         }
 
-        lookup(query) {
+        lookup(query?: string): void {
             var items;
             if (typeof (query) != 'undefined' && query !== null) {
                 this.query = query;
             } else {
-                this.query = this.$element.val();
+                this.query = this.$element.val() as string;
             }
 
             if (this.query.length < this.options.minLength && !this.options.showHintOnFocus) {
-                return this.shown ? this.hide() : this;
+                if (this.shown)
+                    this.hide();
+                return;
             }
 
-            var worker = $.proxy(function() {
-
-                // Bloodhound (since 0.11) needs three arguments. 
+            const worker = $.proxy(function() {
+                // Bloodhound (since 0.11) needs three arguments.
                 // Two of them are callback functions (sync and async) for local and remote data processing
                 // see https://github.com/twitter/typeahead.js/blob/master/src/bloodhound/bloodhound.js#L132
                 if ($.isFunction(this.source) && this.source.length === 3) {
-                    this.source(this.query, $.proxy(this.process, this), $.proxy(this.process, this));
+                    this.source(this.query, () => this.process, () => this.process);
                 } else if ($.isFunction(this.source)) {
-                    this.source(this.query, $.proxy(this.process, this));
+                    this.source(this.query, () => this.process);
                 } else if (this.source) {
                     this.process(this.source);
                 }
@@ -277,10 +290,10 @@ module Bootstrap3Typeahead {
             this.lookupWorker = setTimeout(worker, this.delay);
         }
 
-        process(items) {
-            var that = this;
+        process(items: (string | IItem)[]) {
+            const that = this;
 
-            items = $.grep(items, function(item) {
+            items = $.grep(items, (item: string | IItem, _: number) => {
                 return that.matcher(item);
             });
 
@@ -308,12 +321,12 @@ module Bootstrap3Typeahead {
             return this.render(items).show();
         }
 
-        matcher(item) {
+        matcher(item: string | IItem): boolean {
             var it = this.displayText(item);
-            return ~it.toLowerCase().indexOf(this.query.toLowerCase());
+            return it.toLowerCase().indexOf(this.query.toLowerCase()) !== -1;
         }
 
-        sorter(items) {
+        sorter(items: (string | IItem)[]) {
             var beginswith = [];
             var caseSensitive = [];
             var caseInsensitive = [];
@@ -329,7 +342,7 @@ module Bootstrap3Typeahead {
             return beginswith.concat(caseSensitive, caseInsensitive);
         }
 
-        highlighter(item) {
+        highlighter(item: string): string {
             var text = this.query;
             if (text === "") {
                 return item;
@@ -367,14 +380,13 @@ module Bootstrap3Typeahead {
             return item;
         }
 
-        render(items) {
-            var that = this;
-            var self = this;
-            var activeFound = false;
-            var data = [];
-            var _category = that.options.separator;
+        render(items: (string | IItem)[]): Typeahead {
+            const that = this;
+            const _category = that.options.separator;
+            let activeFound = false;
 
-            $.each(items, function(key, value) {
+            /*
+            $.each(items, function(key: number, value: string | IItem) {
                 // inject separator
                 if (key > 0 && value[_category] !== items[key - 1][_category]) {
                     data.push({
@@ -391,59 +403,68 @@ module Bootstrap3Typeahead {
                 }
                 data.push(value);
             });
+            */
 
-            items = $(data).map(function(i, item) {
+            let itemsEl = $.map(items, (_: number, item: string | IItem) => {
+                /*
                 if ((item.__type || false) == 'category') {
-                    return $(that.options.headerHtml || that.theme.headerHtml).text(item.name)[0];
+                    return $(that.theme.headerHtml).text(item.name)[0];
                 }
 
                 if ((item.__type || false) == 'divider') {
-                    return $(that.options.headerDivider || that.theme.headerDivider)[0];
+                    return $(that.theme.headerDivider)[0];
                 }
+                */
 
-                var text = self.displayText(item);
-                i = $(that.options.item || that.theme.item).data('value', item);
-                i.find(that.options.itemContentSelector || that.theme.itemContentSelector)
-                    .addBack(that.options.itemContentSelector || that.theme.itemContentSelector)
-                    .html(that.highlighter(text, item));
-                if (this.followLinkOnSelect) {
-                    i.find('a').attr('href', self.itemLink(item));
+                let text = that.displayText(item);
+                let i = $(that.theme.item).data('value', item);
+                i.find(that.theme.itemContentSelector)
+                    .addBack(that.theme.itemContentSelector)
+                    .html(that.highlighter(text));
+                if (that.followLinkOnSelect) {
+                    i.find('a').attr('href', that.itemLink(item));
                 }
-                i.find('a').attr('title', self.itemTitle(item));
-                if (text == self.$element.val()) {
+                i.find('a').attr('title', that.itemTitle(item));
+                if (text == that.$element.val()) {
                     i.addClass('active');
-                    self.$element.data('active', item);
+                    that.$element.data('active', item);
                     activeFound = true;
                 }
                 return i[0];
             });
 
+            /*
             if (this.autoSelect && !activeFound) {
-                items.filter(':not(.dropdown-header)').first().addClass('active');
-                this.$element.data('active', items.first().data('value'));
+                itemsEl.filter(':not(.dropdown-header)').first().addClass('active');
+                this.$element.data('active', itemsEl.first().data('value'));
             }
-            this.$menu.html(items);
+            */
+
+            this.$menu.replaceWith(itemsEl);
             return this;
         }
 
-        displayText(item) {
-            return typeof item !== 'undefined' && typeof item.name != 'undefined' ? item.name : item;
+        displayText(item: string | IItem): string {
+            if (typeof item === "string")
+                return item;
+            else
+                return item.name;
         }
 
-        itemLink(item) {
+        itemLink(item: string | IItem): string {
             return null;
         }
 
-        itemTitle(item) {
+        itemTitle(item: string | IItem): string {
             return null;
         }
 
-        next(event) {
+        next() {
             var active = this.$menu.find('.active').removeClass('active');
             var next = active.next();
 
             if (!next.length) {
-                next = $(this.$menu.find($(this.options.item || this.theme.item).prop('tagName'))[0]);
+                next = $(this.$menu.find($(this.theme.item).prop('tagName'))[0]);
             }
 
             next.addClass('active');
@@ -452,12 +473,12 @@ module Bootstrap3Typeahead {
             this.$element.val(this.displayText(newVal) || newVal);
         }
 
-        prev(event) {
+        prev() {
             var active = this.$menu.find('.active').removeClass('active');
             var prev = active.prev();
 
             if (!prev.length) {
-                prev = this.$menu.find($(this.options.item || this.theme.item).prop('tagName')).last();
+                prev = this.$menu.find($(this.theme.item).prop('tagName')).last();
             }
 
             prev.addClass('active');
@@ -468,27 +489,27 @@ module Bootstrap3Typeahead {
 
         listen() {
             this.$element
-                .on('focus.bootstrap3Typeahead', $.proxy(this.focus, this))
-                .on('blur.bootstrap3Typeahead', $.proxy(this.blur, this))
-                .on('keypress.bootstrap3Typeahead', $.proxy(this.keypress, this))
-                .on('propertychange.bootstrap3Typeahead input.bootstrap3Typeahead', $.proxy(this.input, this))
-                .on('keyup.bootstrap3Typeahead', $.proxy(this.keyup, this));
+                .on('focus.bootstrap3Typeahead', () => this.focus)
+                .on('blur.bootstrap3Typeahead', () => this.blur)
+                .on('keypress.bootstrap3Typeahead', () => this.keypress)
+                .on('propertychange.bootstrap3Typeahead input.bootstrap3Typeahead', () => this.input)
+                .on('keyup.bootstrap3Typeahead', () => this.keyup);
 
             if (this.eventSupported('keydown')) {
-                this.$element.on('keydown.bootstrap3Typeahead', $.proxy(this.keydown, this));
+                this.$element.on('keydown.bootstrap3Typeahead', () => this.keydown);
             }
 
-            var itemTagName = $(this.options.item || this.theme.item).prop('tagName')
+            var itemTagName = $(this.theme.item).prop('tagName');
             if ('ontouchstart' in document.documentElement) {
                 this.$menu
-                    .on('touchstart', itemTagName, $.proxy(this.touchstart, this))
-                    .on('touchend', itemTagName, $.proxy(this.click, this));
+                    .on('touchstart', itemTagName, () => this.touchstart)
+                    .on('touchend', itemTagName, () => this.click);
             } else {
                 this.$menu
-                    .on('click', $.proxy(this.click, this))
-                    .on('mouseenter', itemTagName, $.proxy(this.mouseenter, this))
-                    .on('mouseleave', itemTagName, $.proxy(this.mouseleave, this))
-                    .on('mousedown', $.proxy(this.mousedown, this));
+                    .on('click', () => this.click)
+                    .on('mouseenter', itemTagName, () => this.mouseenter)
+                    .on('mouseleave', itemTagName, () => this.mouseleave)
+                    .on('mousedown', () => this.mousedown);
             }
         }
 
@@ -510,17 +531,13 @@ module Bootstrap3Typeahead {
             this.destroyed = true;
         }
 
-        eventSupported(eventName) {
-            var isSupported = eventName in this.$element;
-            if (!isSupported) {
-                this.$element.setAttribute(eventName, 'return;');
-                isSupported = typeof this.$element[eventName] === 'function';
-            }
-            return isSupported;
+        eventSupported(eventName: string): boolean {
+            return eventName in this.$element;
         }
 
-        move(e) {
-            if (!this.shown) return;
+        move(e: JQueryKeyEventObject) {
+            if (!this.shown)
+                return;
 
             switch (e.keyCode) {
                 case 9: // tab
@@ -545,7 +562,7 @@ module Bootstrap3Typeahead {
             }
         }
 
-        keydown(e) {
+        keydown(e: JQueryKeyEventObject) {
             /**
              * Prevent to make an ajax call while copying and pasting.
              *
@@ -556,7 +573,7 @@ module Bootstrap3Typeahead {
                 return;
             }
             this.keyPressed = true;
-            this.suppressKeyPressRepeat = ~$.inArray(e.keyCode, [40, 38, 9, 13, 27]);
+            this.suppressKeyPressRepeat = $.inArray(e.keyCode, [40, 38, 9, 13, 27]) === -1;
             if (!this.shown && e.keyCode == 40) {
                 this.lookup();
             } else {
@@ -564,22 +581,22 @@ module Bootstrap3Typeahead {
             }
         }
 
-        keypress(e) {
+        keypress(e: JQueryKeyEventObject) {
             if (this.suppressKeyPressRepeat) return;
             this.move(e);
         }
 
-        input(e) {
+        input(e: JQueryInputEventObject) {
             // This is a fixed for IE10/11 that fires the input event when a placehoder is changed
             // (https://connect.microsoft.com/IE/feedback/details/810538/ie-11-fires-input-event-on-focus)
             var currentValue = this.$element.val() || this.$element.text();
             if (this.value !== currentValue) {
-                this.value = currentValue;
+                this.value = currentValue as string;
                 this.lookup();
             }
         }
 
-        keyup(e) {
+        keyup(e: JQueryKeyEventObject) {
             if (this.destroyed) {
                 return;
             }
@@ -608,7 +625,7 @@ module Bootstrap3Typeahead {
 
         }
 
-        focus(e) {
+        focus(e: JQueryEventObject) {
             if (!this.focused) {
                 this.focused = true;
                 this.keyPressed = false;
@@ -625,7 +642,7 @@ module Bootstrap3Typeahead {
             }
         }
 
-        blur(e) {
+        blur(e: JQueryMouseEventObject) {
             if (!this.mousedover && !this.mouseddown && this.shown) {
                 this.select();
                 this.hide();
@@ -640,7 +657,7 @@ module Bootstrap3Typeahead {
             }
         }
 
-        click(e) {
+        click(e: JQueryMouseEventObject) {
             e.preventDefault();
             this.skipShowHintOnFocus = true;
             this.select();
@@ -648,13 +665,13 @@ module Bootstrap3Typeahead {
             this.hide();
         }
 
-        mouseenter(e) {
+        mouseenter(e: JQueryMouseEventObject) {
             this.mousedover = true;
             this.$menu.find('.active').removeClass('active');
             $(e.currentTarget).addClass('active');
         }
 
-        mouseleave(e) {
+        mouseleave(e: JQueryMouseEventObject) {
             this.mousedover = false;
             if (!this.focused && this.shown) this.hide();
         }
@@ -662,21 +679,21 @@ module Bootstrap3Typeahead {
         /**
           * We track the mousedown for IE. When clicking on the menu scrollbar, IE makes the input blur thus hiding the menu.
           */
-        mousedown(e) {
+        mousedown(e: JQueryMouseEventObject) {
             this.mouseddown = true;
-            this.$menu.one("mouseup", function(e) {
+            this.$menu.one("mouseup", function(e: JQueryMouseEventObject) {
                 // IE won't fire this, but FF and Chrome will so we reset our flag for them here
                 this.mouseddown = false;
             }.bind(this));
         }
 
-        touchstart(e) {
+        touchstart(e: JQueryEventObject) {
             e.preventDefault();
             this.$menu.find('.active').removeClass('active');
             $(e.currentTarget).addClass('active');
         }
 
-        touchend(e) {
+        touchend(e: JQueryEventObject) {
             e.preventDefault();
             this.select();
             this.$element.focus();
@@ -687,18 +704,21 @@ module Bootstrap3Typeahead {
     /* TYPEAHEAD PLUGIN DEFINITION
      * =========================== */
 
-    var old = $.fn.typeahead;
-
-    $.fn.typeahead = function(option) {
-        var arg = arguments;
+    $.fn.typeahead = function(option: any) {
         if (typeof option == 'string' && option == 'getActive') {
             return this.data('active');
         }
+
+        const arg = arguments;
         return this.each(function() {
-            var $this = $(this);
-            var data = $this.data('typeahead');
-            var options = typeof option == 'object' && option;
-            if (!data) $this.data('typeahead', (data = new Typeahead(this, options)));
+            const $this = $(this);
+            const options = typeof option == 'object' && option;
+            let data = $this.data('typeahead');
+
+            if (!data) {
+                $this.data('typeahead', (data = new Typeahead(this, options)));
+            }
+
             if (typeof option == 'string' && data[option]) {
                 if (arg.length > 1) {
                     data[option].apply(data, Array.prototype.slice.call(arg, 1));
@@ -707,16 +727,6 @@ module Bootstrap3Typeahead {
                 }
             }
         });
-    };
-
-    $.fn.typeahead.Constructor = Typeahead;
-
-    /* TYPEAHEAD NO CONFLICT
-     * =================== */
-
-    $.fn.typeahead.noConflict = function() {
-        $.fn.typeahead = old;
-        return this;
     };
 
 
